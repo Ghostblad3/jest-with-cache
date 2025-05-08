@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+// eslint-disable-next-line no-restricted-imports
+import * as _fs from 'fs';
 import nativeModule = require('module');
 import * as path from 'path';
 import {URL, fileURLToPath, pathToFileURL} from 'url';
@@ -213,6 +215,8 @@ export default class Runtime {
   private readonly esmConditions: Array<string>;
   private readonly cjsConditions: Array<string>;
   private isTornDown = false;
+  private _dbMap: Map<string, {content: string; lastModified: number}>;
+  //private _readFileCounter: number = 0;
 
   constructor(
     config: Config.ProjectConfig,
@@ -222,9 +226,11 @@ export default class Runtime {
     cacheFS: Map<string, string>,
     coverageOptions: ShouldInstrumentOptions,
     testPath: string,
+    dbMap: Map<string, {content: string; lastModified: number}>,
     // TODO: make mandatory in Jest 30
     globalConfig?: Config.GlobalConfig,
   ) {
+    this._dbMap = dbMap;
     this._cacheFS = cacheFS;
     this._config = config;
     this._coverageOptions = coverageOptions;
@@ -1195,6 +1201,7 @@ export default class Runtime {
   }
 
   resetModules(): void {
+    //console.log('Requested number of files', this._readFileCounter);
     this._isolatedModuleRegistry?.clear();
     this._isolatedMockRegistry?.clear();
     this._isolatedModuleRegistry = null;
@@ -1606,7 +1613,12 @@ export default class Runtime {
     filename: string,
     options?: InternalModuleOptions,
   ): string {
-    const source = this.readFile(filename);
+    if (filename.includes('node_modules') || options?.isInternalModule) {
+      return this.readFile(filename);
+    }
+
+    const item = this._dbMap.get(filename);
+    const source = item ? item.content : this.readFile(filename);
 
     if (options?.isInternalModule) {
       return source;
@@ -2534,15 +2546,13 @@ export default class Runtime {
   }
 
   private readFile(filename: string): string {
-    let source = this._cacheFS.get(filename);
+    //this._readFileCounter += 1;
+    const dataFromCache = this._dbMap.get(filename);
+    if (dataFromCache) return dataFromCache.content;
 
-    if (!source) {
-      const buffer = this.readFileBuffer(filename);
-      source = buffer.toString('utf8');
-
-      this._cacheFS.set(filename, source);
-    }
-
+    const source = _fs.readFileSync(filename, 'utf8');
+    const mtime = _fs.statSync(filename).mtime.getTime();
+    this._dbMap.set(filename, {content: source, lastModified: mtime});
     return source;
   }
 

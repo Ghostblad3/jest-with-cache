@@ -5,6 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import {exec} from 'child_process';
+// eslint-disable-next-line no-restricted-imports
+import * as fs from 'fs';
+import * as __fs from 'fs/promises';
+import * as path from 'path';
 import chalk = require('chalk');
 import Emittery = require('emittery');
 import pLimit = require('p-limit');
@@ -39,6 +44,121 @@ export type {
 
 type TestWorker = typeof import('./testWorker');
 
+function getTempDbFilesFromFolder() {
+  const folderPath = process.cwd();
+  const files = fs.readdirSync('./');
+  return files
+    .filter(file => file.includes('temp-output') && file.endsWith('.json'))
+    .map(file => path.join(folderPath, file));
+}
+
+async function combine(tempDbFiles: Array<string>) {
+  const merged = new Map();
+  for (const dbFile of tempDbFiles) {
+    const data = await __fs.readFile(dbFile, 'utf8');
+    const jsonData = JSON.parse(data);
+    if (merged.size === 0) {
+      for (const item of jsonData) {
+        merged.set(item.name, {
+          content: item.content,
+          lastModified: item.lastModified,
+        });
+      }
+    } else {
+      for (const item of jsonData) {
+        const name = item.name;
+        const lastModified = item.lastModified;
+        const content = item.content;
+
+        if (merged.has(name)) {
+          const existing = merged.get(name);
+          if (lastModified > existing.lastModified) {
+            merged.set(name, {content, lastModified});
+          }
+        } else {
+          merged.set(name, {content, lastModified});
+        }
+      }
+    }
+  }
+
+  return merged;
+}
+
+async function saveMapToFile(
+  fileName: string,
+  map: Map<string, {lastModified: number; content: string}>,
+) {
+  const array = Array.from(map, ([key, value]) => ({
+    content: value.content,
+    lastModified: value.lastModified,
+    name: key,
+  }));
+
+  const jsonString = JSON.stringify(array, null, 1);
+  await __fs.writeFile(fileName, jsonString, 'utf8');
+  // eslint-disable-next-line no-console
+  console.log('Saved map to file:', fileName);
+}
+
+async function readFileAsync(fileName: string) {
+  if (!fs.existsSync(fileName)) {
+    return '[]';
+  }
+
+  return await __fs.readFile(fileName, 'utf8');
+}
+
+function convertToMap(
+  data: string,
+): Map<string, {content: string; lastModified: number}> {
+  const array = JSON.parse(data);
+  const map = new Map<string, {content: string; lastModified: number}>();
+
+  for (const item of array) {
+    map.set(item.name, {
+      content: item.content,
+      lastModified: item.lastModified,
+    });
+  }
+
+  return map;
+}
+
+async function deleteTempFiles(tempDbFiles: Array<string>) {
+  try {
+    await Promise.all(
+      tempDbFiles.map(async item => {
+        try {
+          const filePath = item;
+          // eslint-disable-next-line no-console
+          console.log(`Attempting to delete: ${filePath}`);
+
+          await new Promise((resolve, reject) => {
+            exec(`del /f "${filePath}"`, (err, _stdout, stderr) => {
+              if (err) {
+                console.error(`Error deleting file: ${filePath}. ${stderr}`);
+                reject(err);
+              } else {
+                // eslint-disable-next-line no-console
+                console.log(`Deleted: ${filePath}`);
+                resolve(null);
+              }
+            });
+          });
+        } catch (err: any) {
+          console.error(
+            `Failed to delete file: ${item}. Error: ${err.message}`,
+          );
+        }
+      }),
+    );
+  } catch (err: any) {
+    console.error(`Error during file deletion process: ${err.message}`);
+    throw err; // Re-throw the error if needed
+  }
+}
+
 export default class TestRunner extends EmittingTestRunner {
   readonly #eventEmitter = new Emittery<TestEvents>();
 
@@ -47,12 +167,79 @@ export default class TestRunner extends EmittingTestRunner {
     watcher: TestWatcher,
     options: TestRunnerOptions,
   ): Promise<void> {
-    return options.serial
-      ? this.#createInBandTestRun(tests, watcher)
-      : this.#createParallelTestRun(tests, watcher);
+    console.time('Read module cache from disk');
+    const data = await readFileAsync('./output.json');
+    console.timeEnd('Read module cache from disk');
+
+    //const otherData = await readFileAsync('./other.json');
+
+    console.time('Build cache Map');
+    const dbMap = convertToMap(data);
+    console.timeEnd('Build cache Map');
+
+    //const otherDataMap = convertToMap(otherData);
+
+    console.time('Invalidate cache');
+    try {
+      await Promise.allSettled(
+        [...dbMap.entries()].map(async ([key, value]) => {
+          try {
+            const stats = await fs.promises.stat(key);
+            const mtime = stats.mtime.getTime();
+
+            if (mtime !== value.lastModified) {
+              const content = await fs.promises.readFile(key, 'utf8');
+              dbMap.set(key, {content, lastModified: mtime});
+            }
+          } catch {
+            dbMap.delete(key);
+          }
+        }),
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.log(e);
+      throw new Error(`Error reading file: ${e}`);
+    }
+    console.timeEnd('Invalidate cache');
+
+    if (options.serial) {
+      await this.#createInBandTestRun(tests, watcher, dbMap);
+
+      console.time('Save cache to disk');
+      await saveMapToFile('./output.json', dbMap);
+      console.timeEnd('Save cache to disk');
+    } else {
+      console.time('Save cache to disk');
+      await saveMapToFile('./output.json', dbMap);
+      console.timeEnd('Save cache to disk');
+
+      await this.#createParallelTestRun(tests, watcher);
+
+      const tempDbFiles = getTempDbFilesFromFolder();
+
+      console.time('Combine worker caches');
+      const combinedMap = await combine(tempDbFiles);
+      console.timeEnd('Combine worker caches');
+
+      console.time('Save cache to disk');
+      await saveMapToFile('./output.json', combinedMap);
+      console.timeEnd('Save cache to disk');
+
+      await deleteTempFiles(tempDbFiles);
+    }
+
+    // eslint-disable-next-line no-console
+    console.log('Tests finished, exiting...');
+
+    return Promise.resolve();
   }
 
-  async #createInBandTestRun(tests: Array<Test>, watcher: TestWatcher) {
+  async #createInBandTestRun(
+    tests: Array<Test>,
+    watcher: TestWatcher,
+    dbMap: Map<string, {lastModified: number; content: string}>,
+  ) {
     process.env.JEST_WORKER_ID = '1';
     const mutex = pLimit(1);
     return tests.reduce(
@@ -79,6 +266,7 @@ export default class TestRunner extends EmittingTestRunner {
                 test.context.config,
                 test.context.resolver,
                 this._context,
+                dbMap,
                 sendMessageToJest,
               );
             })

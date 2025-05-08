@@ -6,6 +6,7 @@
  *
  */
 
+import * as _fs from 'fs/promises';
 import chalk = require('chalk');
 import * as fs from 'graceful-fs';
 import sourcemapSupport = require('source-map-support');
@@ -80,9 +81,18 @@ async function runTestInternal(
   projectConfig: Config.ProjectConfig,
   resolver: Resolver,
   context: TestRunnerContext,
+  dbMap: Map<string, {lastModified: number; content: string}>,
   sendMessageToJest?: TestFileEvent,
 ): Promise<RunTestInternalResult> {
-  const testSource = fs.readFileSync(path, 'utf8');
+  let testSource = dbMap.get(path)?.content;
+
+  if (!testSource) {
+    testSource = await _fs.readFile(path, 'utf8');
+    const stats = await _fs.stat(path);
+    const mtime = stats.mtime.getTime();
+    dbMap.set(path, {content: testSource, lastModified: mtime});
+  }
+
   const docblockPragmas = docblock.parse(docblock.extract(testSource));
   const customEnvironment = docblockPragmas['jest-environment'];
 
@@ -196,6 +206,7 @@ async function runTestInternal(
         context.sourcesRelatedToTestsInChangedFiles,
     },
     path,
+    dbMap,
     globalConfig,
   );
 
@@ -378,6 +389,7 @@ export default async function runTest(
   config: Config.ProjectConfig,
   resolver: Resolver,
   context: TestRunnerContext,
+  dbMap: Map<string, {lastModified: number; content: string}>,
   sendMessageToJest?: TestFileEvent,
 ): Promise<TestResult> {
   const {leakDetector, result} = await runTestInternal(
@@ -386,6 +398,7 @@ export default async function runTest(
     config,
     resolver,
     context,
+    dbMap,
     sendMessageToJest,
   );
 

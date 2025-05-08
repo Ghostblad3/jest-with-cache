@@ -465,8 +465,10 @@ export default class ChildProcessWorker
     // kill a new worker that has been spawned.
     const childToKill = this._child;
 
-    childToKill.kill('SIGTERM');
-    return setTimeout(() => childToKill.kill('SIGKILL'), SIGKILL_DELAY);
+    return setTimeout(() => {
+      childToKill.kill('SIGTERM');
+      childToKill.kill('SIGKILL');
+    }, 60000);
   }
 
   forceExit(): void {
