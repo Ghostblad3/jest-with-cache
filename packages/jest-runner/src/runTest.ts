@@ -6,7 +6,7 @@
  *
  */
 
-import * as _fs from 'fs/promises';
+import {readFile,stat} from 'fs/promises';
 import chalk = require('chalk');
 import * as fs from 'graceful-fs';
 import sourcemapSupport = require('source-map-support');
@@ -81,18 +81,17 @@ async function runTestInternal(
   projectConfig: Config.ProjectConfig,
   resolver: Resolver,
   context: TestRunnerContext,
-  dbMap: Map<string, {lastModified: number; content: string}>,
   sendMessageToJest?: TestFileEvent,
+  dbMap?: Map<string, {lastModified: number; content: string}>,
 ): Promise<RunTestInternalResult> {
-  let testSource = dbMap.get(path)?.content;
+  let testSource = dbMap!.get(path)?.content;
 
   if (!testSource) {
-    testSource = await _fs.readFile(path, 'utf8');
-    const stats = await _fs.stat(path);
+    testSource = await readFile(path, 'utf8');
+    const stats = await stat(path);
     const mtime = stats.mtime.getTime();
-    dbMap.set(path, {content: testSource, lastModified: mtime});
+    dbMap!.set(path, {content: testSource, lastModified: mtime});
   }
-
   const docblockPragmas = docblock.parse(docblock.extract(testSource));
   const customEnvironment = docblockPragmas['jest-environment'];
 
@@ -112,7 +111,6 @@ async function runTestInternal(
       testEnvironment: customEnvironment,
     });
   }
-
   const cacheFS = new Map([[path, testSource]]);
   const transformer = await createScriptTransformer(projectConfig, cacheFS);
 
@@ -129,6 +127,7 @@ async function runTestInternal(
       ? require(projectConfig.runtime)
       : require('jest-runtime'),
   ).default;
+
 
   const consoleOut = globalConfig.useStderr ? process.stderr : process.stdout;
   const consoleFormatter = (type: LogType, message: LogMessage) =>
@@ -157,7 +156,6 @@ async function runTestInternal(
   if (typeof docblockEnvironmentOptions === 'string') {
     extraTestEnvironmentOptions = JSON.parse(docblockEnvironmentOptions);
   }
-
   const environment = new TestEnvironment(
     {
       globalConfig,
@@ -206,8 +204,8 @@ async function runTestInternal(
         context.sourcesRelatedToTestsInChangedFiles,
     },
     path,
-    dbMap,
     globalConfig,
+    dbMap,
   );
 
   let isTornDown = false;
@@ -389,8 +387,8 @@ export default async function runTest(
   config: Config.ProjectConfig,
   resolver: Resolver,
   context: TestRunnerContext,
-  dbMap: Map<string, {lastModified: number; content: string}>,
   sendMessageToJest?: TestFileEvent,
+  dbMap?: Map<string, {lastModified: number; content: string}>,
 ): Promise<TestResult> {
   const {leakDetector, result} = await runTestInternal(
     path,
@@ -398,8 +396,8 @@ export default async function runTest(
     config,
     resolver,
     context,
-    dbMap,
     sendMessageToJest,
+    dbMap,
   );
 
   if (leakDetector) {

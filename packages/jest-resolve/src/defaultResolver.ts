@@ -90,6 +90,7 @@ export type AsyncResolver = (
 
 export type Resolver = SyncResolver | AsyncResolver;
 
+
 const defaultResolver: SyncResolver = (path, options) => {
   // Yarn 2 adds support to `resolve` automatically so the pnpResolver is only
   // needed for Yarn 1 which implements version 1 of the pnp spec

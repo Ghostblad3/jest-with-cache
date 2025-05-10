@@ -6,7 +6,7 @@
  */
 
 // eslint-disable-next-line no-restricted-imports
-import * as _fs from 'fs';
+import {readFileSync, statSync} from 'fs';
 import nativeModule = require('module');
 import * as path from 'path';
 import {URL, fileURLToPath, pathToFileURL} from 'url';
@@ -226,11 +226,11 @@ export default class Runtime {
     cacheFS: Map<string, string>,
     coverageOptions: ShouldInstrumentOptions,
     testPath: string,
-    dbMap: Map<string, {content: string; lastModified: number}>,
     // TODO: make mandatory in Jest 30
     globalConfig?: Config.GlobalConfig,
+    dbMap?: Map<string, {content: string; lastModified: number}>,
   ) {
-    this._dbMap = dbMap;
+    this._dbMap = dbMap!;
     this._cacheFS = cacheFS;
     this._config = config;
     this._coverageOptions = coverageOptions;
@@ -2550,8 +2550,8 @@ export default class Runtime {
     const dataFromCache = this._dbMap.get(filename);
     if (dataFromCache) return dataFromCache.content;
 
-    const source = _fs.readFileSync(filename, 'utf8');
-    const mtime = _fs.statSync(filename).mtime.getTime();
+    const source = readFileSync(filename, 'utf8');
+    const mtime = statSync(filename).mtime.getTime();
     this._dbMap.set(filename, {content: source, lastModified: mtime});
     return source;
   }

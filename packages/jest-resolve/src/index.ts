@@ -12,8 +12,9 @@ export type {
   SyncResolver,
   PackageFilter,
   PathFilter,
-  ResolverOptions,
+  ResolverOptions
 } from './defaultResolver';
+export {addOtherMap,getOtherMap} from './fileWalkers';
 export type {
   FindNodeModuleConfig,
   ResolveModuleConfig,

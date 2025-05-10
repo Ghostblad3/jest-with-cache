@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import { constants } from "fs";
+import {readFile, stat, writeFile, access} from 'fs/promises';
 import * as path from 'path';
 import chalk = require('chalk');
 import exit = require('exit');
@@ -17,6 +19,48 @@ import {deprecationEntries} from 'jest-config';
 import {clearLine, tryRealpath} from 'jest-util';
 import {validateCLIOptions} from 'jest-validate';
 import * as args from './args';
+import {addOtherMap,getOtherMap}  from 'jest-resolve';
+
+async function saveMapToFile(
+  fileName: string,
+  map: Map<string, {lastModified: number; content: object}>,
+) {
+  const array = Array.from(map, ([key, value]) => ({
+    content: value.content,
+    lastModified: value.lastModified,
+    name: key,
+  }));
+
+  const jsonString = JSON.stringify(array, null, 1);
+  await writeFile(fileName, jsonString, 'utf8');
+  // eslint-disable-next-line no-console
+  console.log('Saved map to file:', fileName);
+}
+
+async function readFileAsync(fileName: string) {
+  try {
+    await access(fileName, constants.F_OK);
+    return await readFile(fileName, 'utf8');
+  } catch {
+    return '[]';
+  }
+}
+
+function convertToMap(
+  data: string,
+): Map<string, {content: object; lastModified: number}> {
+  const array = JSON.parse(data) as Array<{name:string; content: object; lastModified: number}>;
+  const map = new Map<string, {content: object; lastModified: number}>();
+
+  for (const item of array) {
+    map.set(item.name, {
+      content: item.content,
+      lastModified: item.lastModified,
+    });
+  }
+
+  return map;
+}
 
 export async function run(
   maybeArgv?: Array<string>,
@@ -30,10 +74,47 @@ export async function run(
       return;
     }
 
+    console.time('Read other data cache');
+    const otherData = await readFileAsync('./other.json');
+    console.timeEnd('Read other data cache');
+    console.time('Converting to map');
+    const otherMap = convertToMap(otherData);
+    console.timeEnd('Converting to map');
+
+    console.time('Invalidating the cache');
+    try {
+      await Promise.allSettled(
+        [...otherMap.entries()].map(async ([key, value]) => {
+          try {
+            const stats = await stat(key);
+            const mtime = stats.mtime.getTime();
+
+            if (mtime !== value.lastModified) {
+              const content = await readFile(key, 'utf8');
+              otherMap.set(key, {content: JSON.parse(content), lastModified: mtime});
+            }
+          } catch {
+            otherMap.delete(key);
+          }
+        }),
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.log(e);
+      throw new Error(`Error reading file: ${e}`);
+    }
+    console.timeEnd('Invalidating the cache');
+
+    addOtherMap(otherMap);
+
     const projects = getProjectListFromCLIArgs(argv, project);
 
     const {results, globalConfig} = await runCLI(argv, projects);
     readResultsAndExit(results, globalConfig);
+
+    console.time('Save other data cache');
+    await saveMapToFile('./other.json', getOtherMap()!);
+    console.timeEnd('Save other data cache');
   } catch (error: any) {
     clearLine(process.stderr);
     clearLine(process.stdout);

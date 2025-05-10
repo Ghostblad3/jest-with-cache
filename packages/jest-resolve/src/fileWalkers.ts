@@ -10,6 +10,16 @@ import * as fs from 'graceful-fs';
 import {tryRealpath} from 'jest-util';
 import type {PackageJSON} from './types';
 
+let otherMap: Map<string, {content:object, lastModified: number}> | null = null;
+
+export const addOtherMap = (map: Map<string, {content: object, lastModified: number}>) => {
+  otherMap = map;
+}
+
+export const getOtherMap = (): Map<string, {content:object, lastModified: number}> | null => {
+  return otherMap;
+}
+
 export function clearFsCache(): void {
   checkedPaths.clear();
   checkedRealpathPaths.clear();
@@ -74,17 +84,35 @@ function realpathCached(path: string): string {
 
 const packageContents = new Map<string, PackageJSON>();
 export function readPackageCached(path: string): PackageJSON {
-  let result = packageContents.get(path);
+  //let result = packageContents.get(path);
 
-  if (result != null) {
-    return result;
+  //if (result != null) {
+  //  return result;
+  //}
+  try {
+    const item = otherMap?.get(path);
+
+    if (item) {
+      //console.log('cache hit');
+      return item.content as PackageJSON;
+    } else {
+      //console.log('cache miss', otherMap?.size);
+      const json = JSON.parse(fs.readFileSync(path, 'utf8')) as PackageJSON;
+      const stats = fs.statSync(path);
+      const mtime = stats.mtime.getTime();
+      otherMap?.set(path, {content: json, lastModified: mtime});
+      return json;
+    }
+  } catch(e){
+      console.error("Error reading cached package:", e);
   }
 
-  result = JSON.parse(fs.readFileSync(path, 'utf8')) as PackageJSON;
+  return {};
+  //result = JSON.parse(fs.readFileSync(path, 'utf8')) as PackageJSON;
 
-  packageContents.set(path, result);
+  //packageContents.set(path, result);
 
-  return result;
+  //return result;
 }
 
 // adapted from

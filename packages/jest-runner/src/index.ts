@@ -6,9 +6,8 @@
  */
 
 import {exec} from 'child_process';
-// eslint-disable-next-line no-restricted-imports
-import * as fs from 'fs';
-import * as __fs from 'fs/promises';
+import { constants } from "fs";
+import {readFile, stat, writeFile, access, readdir} from 'fs/promises';
 import * as path from 'path';
 import chalk = require('chalk');
 import Emittery = require('emittery');
@@ -25,6 +24,7 @@ import {JestWorkerFarm, PromiseWithCustomMessage, Worker} from 'jest-worker';
 import runTest from './runTest';
 import type {SerializableResolver} from './testWorker';
 import {EmittingTestRunner, TestRunnerOptions, UnsubscribeFn} from './types';
+
 
 export type {Test, TestEvents} from '@jest/test-result';
 export type {Config} from '@jest/types';
@@ -44,19 +44,19 @@ export type {
 
 type TestWorker = typeof import('./testWorker');
 
-function getTempDbFilesFromFolder() {
+async function getTempDbFilesFromFolder(pattern: string) {
   const folderPath = process.cwd();
-  const files = fs.readdirSync('./');
+  const files = await readdir('./');
   return files
-    .filter(file => file.includes('temp-output') && file.endsWith('.json'))
+    .filter(file => file.includes(pattern) && file.endsWith('.json'))
     .map(file => path.join(folderPath, file));
 }
 
 async function combine(tempDbFiles: Array<string>) {
-  const merged = new Map();
+  const merged: Map<string, {content: string; lastModified: number}> = new Map();
   for (const dbFile of tempDbFiles) {
-    const data = await __fs.readFile(dbFile, 'utf8');
-    const jsonData = JSON.parse(data);
+    const data = await readFile(dbFile, 'utf8');
+    const jsonData = JSON.parse(data) as Array<{name: string, content:string, lastModified:number}>;
     if (merged.size === 0) {
       for (const item of jsonData) {
         merged.set(item.name, {
@@ -70,8 +70,8 @@ async function combine(tempDbFiles: Array<string>) {
         const lastModified = item.lastModified;
         const content = item.content;
 
-        if (merged.has(name)) {
-          const existing = merged.get(name);
+        const existing = merged.get(name);
+        if (existing) {
           if (lastModified > existing.lastModified) {
             merged.set(name, {content, lastModified});
           }
@@ -96,23 +96,24 @@ async function saveMapToFile(
   }));
 
   const jsonString = JSON.stringify(array, null, 1);
-  await __fs.writeFile(fileName, jsonString, 'utf8');
+  await writeFile(fileName, jsonString, 'utf8');
   // eslint-disable-next-line no-console
   console.log('Saved map to file:', fileName);
 }
 
 async function readFileAsync(fileName: string) {
-  if (!fs.existsSync(fileName)) {
+  try {
+    await access(fileName, constants.F_OK);
+    return await readFile(fileName, 'utf8');
+  } catch {
     return '[]';
   }
-
-  return await __fs.readFile(fileName, 'utf8');
 }
 
 function convertToMap(
   data: string,
 ): Map<string, {content: string; lastModified: number}> {
-  const array = JSON.parse(data);
+  const array = JSON.parse(data) as Array<{name:string; content: string; lastModified: number}>;
   const map = new Map<string, {content: string; lastModified: number}>();
 
   for (const item of array) {
@@ -184,11 +185,11 @@ export default class TestRunner extends EmittingTestRunner {
       await Promise.allSettled(
         [...dbMap.entries()].map(async ([key, value]) => {
           try {
-            const stats = await fs.promises.stat(key);
+            const stats = await stat(key);
             const mtime = stats.mtime.getTime();
 
             if (mtime !== value.lastModified) {
-              const content = await fs.promises.readFile(key, 'utf8');
+              const content = await readFile(key, 'utf8');
               dbMap.set(key, {content, lastModified: mtime});
             }
           } catch {
@@ -216,7 +217,7 @@ export default class TestRunner extends EmittingTestRunner {
 
       await this.#createParallelTestRun(tests, watcher);
 
-      const tempDbFiles = getTempDbFilesFromFolder();
+      const tempDbFiles = await getTempDbFilesFromFolder('temp-output');
 
       console.time('Combine worker caches');
       const combinedMap = await combine(tempDbFiles);
@@ -227,6 +228,14 @@ export default class TestRunner extends EmittingTestRunner {
       console.timeEnd('Save cache to disk');
 
       await deleteTempFiles(tempDbFiles);
+
+      console.time('Combine other data caches')
+      const tempOtherDbFiles = await getTempDbFilesFromFolder('pmet-other');
+      const combinedOtherMap = await combine(tempOtherDbFiles);
+      await saveMapToFile('./other.json', combinedOtherMap);
+      console.timeEnd('Combine other data caches')
+
+      await deleteTempFiles(tempOtherDbFiles);
     }
 
     // eslint-disable-next-line no-console
@@ -266,8 +275,8 @@ export default class TestRunner extends EmittingTestRunner {
                 test.context.config,
                 test.context.resolver,
                 this._context,
-                dbMap,
                 sendMessageToJest,
+                dbMap,
               );
             })
             .then(

@@ -48,12 +48,11 @@ export async function runCLI(
   // it'll break the JSON structure and it won't be valid.
   const outputStream =
     argv.json || argv.useStderr ? process.stderr : process.stdout;
-
   const {globalConfig, configs, hasDeprecationWarnings} = await readConfigs(
     argv,
     projects,
   );
-
+  //console.log({globalConfig, configs, hasDeprecationWarnings});
   if (argv.debug) {
     logDebugMessages(globalConfig, configs, outputStream);
   }

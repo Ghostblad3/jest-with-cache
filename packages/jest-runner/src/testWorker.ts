@@ -7,8 +7,9 @@
  */
 
 // eslint-disable-next-line no-restricted-imports
-import * as fs from 'fs';
-import * as __fs from 'fs/promises';
+import {constants} from 'fs';
+import {writeFile, readFile, access} from 'fs/promises';
+import {addOtherMap}  from 'jest-resolve';
 import exit = require('exit');
 import type {
   SerializableError,
@@ -38,7 +39,7 @@ type WorkerData = {
 
 async function saveMapToFile(
   fileName: string,
-  map: Map<string, {lastModified: number; content: string}>,
+  map: Map<string, {lastModified: number; content: string | object}>,
 ) {
   const array = Array.from(map, ([key, value]) => ({
     content: value.content,
@@ -47,22 +48,37 @@ async function saveMapToFile(
   }));
 
   const jsonString = JSON.stringify(array, null, 1);
-  await __fs.writeFile(fileName, jsonString, 'utf8');
+  await writeFile(fileName, jsonString, 'utf8');
   // eslint-disable-next-line no-console
   console.log('Saved map to file:', fileName);
 }
 
 async function readFileAsync(fileName: string) {
-  if (!fs.existsSync(fileName)) {
+  try {
+    await access(fileName, constants.F_OK);
+    return await readFile(fileName, 'utf8');
+  }catch (e){
     return '[]';
   }
-
-  return await __fs.readFile(fileName, 'utf8');
 }
 
 function convertToMap(data: string) {
-  const array = JSON.parse(data);
-  const map = new Map();
+  const array = JSON.parse(data) as Array<{name:string, content:string, lastModified: number}>;
+  const map = new Map<string, {content: string, lastModified:number}>();
+
+  for (const item of array) {
+    map.set(item.name, {
+      content: item.content,
+      lastModified: item.lastModified,
+    });
+  }
+
+  return map;
+}
+
+function convertToOtherMap(data: string) {
+  const array = JSON.parse(data) as Array<{name:string, content:object, lastModified: number}>;
+  const map = new Map<string, {content: object, lastModified:number}>();
 
   for (const item of array) {
     map.set(item.name, {
@@ -75,6 +91,7 @@ function convertToMap(data: string) {
 }
 
 let dbMap: Map<string, {content: string; lastModified: number}> | null = null;
+let otherMap: Map<string, {content: object; lastModified: number}> | null = null;
 let lock = false;
 class Mutex {
   private _locked: boolean;
@@ -169,6 +186,12 @@ export async function worker({
     dbMap = convertToMap(data);
   }
 
+  if (!otherMap){
+    const data = await readFileAsync('./other.json');
+    otherMap = convertToOtherMap(data);
+    addOtherMap(otherMap);
+  }
+
   try {
     return await runTest(
       path,
@@ -182,8 +205,8 @@ export async function worker({
           context.sourcesRelatedToTestsInChangedFiles &&
           new Set(context.sourcesRelatedToTestsInChangedFiles),
       },
-      dbMap,
       sendMessageToJest,
+      dbMap
     );
   } catch (error: any) {
     throw formatError(error);
@@ -191,6 +214,8 @@ export async function worker({
 }
 
 process.on('beforeExit', async () => {
+  if (!dbMap || !otherMap) return;
+
   await mutex.lock();
   if (lock) {
     mutex.unlock();
@@ -200,10 +225,13 @@ process.on('beforeExit', async () => {
   mutex.unlock();
 
   try {
+    const randomPart = Math.floor(Math.random() * (10000000000 - 1000000000 + 1)) + 1000000000;
     const name = `./temp-output-${
-      Math.floor(Math.random() * (10000000000 - 1000000000 + 1)) + 1000000000
+      randomPart
     }.json`;
-    await saveMapToFile(name, dbMap!);
+    const otherName = `./pmet-other-${randomPart}.json`;
+    await saveMapToFile(name, dbMap);
+    await saveMapToFile(otherName, otherMap);
     // eslint-disable-next-line no-console
     console.log(`Database saved as ${name}`);
   } catch (error) {
