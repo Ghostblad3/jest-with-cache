@@ -75,7 +75,7 @@ export async function run(
     }
 
     console.time('Read other data cache');
-    const otherData = await readFileAsync('./other.json');
+    const otherData = await readFileAsync('./small.json');
     console.timeEnd('Read other data cache');
     console.time('Converting to map');
     const otherMap = convertToMap(otherData);
@@ -113,7 +113,7 @@ export async function run(
     readResultsAndExit(results, globalConfig);
 
     console.time('Save other data cache');
-    await saveMapToFile('./other.json', getOtherMap()!);
+    await saveMapToFile('./small.json', getOtherMap()!);
     console.timeEnd('Save other data cache');
   } catch (error: any) {
     clearLine(process.stderr);
